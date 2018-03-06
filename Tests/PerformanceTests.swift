@@ -88,6 +88,12 @@ class PerformanceTests: XCTestCase {
         }
     }
 
+    func testCompiledJSONConsumer() {
+        measure {
+            _ = try! parseJSON3(json)
+        }
+    }
+
     func testJSONSerialization() {
         let data = json.data(using: .utf8)!
         measure {

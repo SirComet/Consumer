@@ -1,6 +1,6 @@
 //
 //  handwritten.swift
-//  Consumer
+//  JSON
 //
 //  Created by Nick Lockwood on 05/03/2018.
 //  Copyright © 2018 Nick Lockwood. All rights reserved.
@@ -10,7 +10,6 @@
 public func parseJSON2(_ input: String) throws -> Any {
     let input = input.unicodeScalars
     var index = input.startIndex
-    var offset = 0
 
     var bestIndex = input.startIndex
     var expected: String?
@@ -22,7 +21,6 @@ public func parseJSON2(_ input: String) throws -> Any {
 
     func readChar(where fn: (UnicodeScalar) -> Bool = { _ in true }) -> Character? {
         if index < input.endIndex, fn(input[index]) {
-            offset += 1
             defer { index = input.index(after: index) }
             return Character(input[index])
         }
@@ -39,17 +37,14 @@ public func parseJSON2(_ input: String) throws -> Any {
 
     func readString(_ string: String) -> Bool {
         let scalars = string.unicodeScalars
-        var newOffset = offset
         var newIndex = index
         for c in scalars {
             guard newIndex < input.endIndex, input[newIndex] == c else {
                 return false
             }
-            newOffset += 1
             newIndex = input.index(after: newIndex)
         }
         index = newIndex
-        offset = newOffset
         return true
     }
 
@@ -84,7 +79,7 @@ public func parseJSON2(_ input: String) throws -> Any {
                 number.append(c)
             }
         } else {
-            if !number.isEmpty, index > bestIndex {
+            if !number.isEmpty, index >= bestIndex {
                 bestIndex = index
                 expected = "0 – 9"
             }
@@ -102,7 +97,7 @@ public func parseJSON2(_ input: String) throws -> Any {
                 number.append(c)
             }
             guard let c = readChar(from: "0", to: "9") else {
-                if index > bestIndex {
+                if index >= bestIndex {
                     bestIndex = index
                     expected = "'0' – '9'"
                 }
@@ -125,6 +120,25 @@ public func parseJSON2(_ input: String) throws -> Any {
             readChar(from: "a", to: "f")).map(String.init)
     }
 
+    func indexToOffset(_ index: String.Index) -> String {
+        var line = 1
+        var column = 1
+        var wasReturn = false
+        for c in input[..<index] {
+            switch c {
+            case "\n" where wasReturn:
+                continue
+            case "\r", "\n":
+                line += 1
+                column = 1
+            default:
+                column += 1
+            }
+            wasReturn = (c == "\r")
+        }
+        return "\(line):\(column)"
+    }
+
     func string() throws -> String? {
         let start = index
         guard readChar("\"") != nil else { return nil }
@@ -132,7 +146,7 @@ public func parseJSON2(_ input: String) throws -> Any {
         while let char = readChar(where: { $0 != "\"" }) {
             if char == "\\" {
                 guard let char = readChar() else {
-                    throw Error(string: "Expected '\"' at \(offset)")
+                    throw Error(string: "Expected '\"' at \(indexToOffset(bestIndex))")
                 }
                 switch char {
                 case "\"": string.append("\"")
@@ -146,7 +160,7 @@ public func parseJSON2(_ input: String) throws -> Any {
                 case "u":
                     guard let a = readHex(), let b = readHex(),
                         let c = readHex(), let d = readHex() else {
-                        if index > bestIndex {
+                        if index >= bestIndex {
                             bestIndex = index
                             expected = "'0' – '9', 'A' - 'Z' or 'a' - 'z'"
                         }
@@ -159,14 +173,14 @@ public func parseJSON2(_ input: String) throws -> Any {
                     }
                     string.append(String(char))
                 default:
-                    throw Error(string: "Unexpected token '\(char)' at \(offset)")
+                    throw Error(string: "Unexpected token '\(char)' at \(indexToOffset(bestIndex))")
                 }
             } else {
                 string.append(char)
             }
         }
         guard readChar("\"") != nil else {
-            if index > bestIndex {
+            if index >= bestIndex {
                 bestIndex = index
                 expected = "'\\\"'"
             }
@@ -184,14 +198,14 @@ public func parseJSON2(_ input: String) throws -> Any {
             guard let key = try string() else { break }
             skipWhitespace()
             guard readChar(":") != nil else {
-                if index > bestIndex {
+                if index >= bestIndex {
                     bestIndex = index
                     expected = "':'"
                 }
                 return nil
             }
             guard let value = try json() else {
-                if index > bestIndex {
+                if index >= bestIndex {
                     bestIndex = index
                     expected = "json"
                 }
@@ -201,7 +215,7 @@ public func parseJSON2(_ input: String) throws -> Any {
             guard readChar(",") != nil else { break }
         }
         guard readChar("}") != nil else {
-            if index > bestIndex {
+            if index >= bestIndex {
                 bestIndex = index
                 expected = "'}'"
             }
@@ -211,6 +225,7 @@ public func parseJSON2(_ input: String) throws -> Any {
     }
 
     func array() throws -> Any? {
+        let startIndex = index
         guard readChar("[") != nil else { return nil }
         var values = [Any]()
         while true {
@@ -219,10 +234,11 @@ public func parseJSON2(_ input: String) throws -> Any {
             guard readChar(",") != nil else { break }
         }
         guard readChar("]") != nil else {
-            if index > bestIndex {
+            if index >= bestIndex {
                 bestIndex = index
                 expected = "']'"
             }
+            index = startIndex
             return nil
         }
         return values
@@ -234,34 +250,39 @@ public func parseJSON2(_ input: String) throws -> Any {
             skipWhitespace()
             return value
         }
-        expected = "boolean, null, number, string, object or array"
         return nil
     }
 
-    func token() -> String {
+    func token(at index: String.Index) -> String {
         var remaining = input[index...]
         guard let first = remaining.first else { return "" }
         let whitespace = " \t\n\r".unicodeScalars
-        var token = ""
+        var token = "'"
         if whitespace.contains(first) {
-            token = String(first)
+            switch first {
+            case "\t": token.append("\\t")
+            case "\r": token.append("\\r")
+            case "\n": token.append("\\n")
+            default: token.append(" ")
+            }
         } else {
             while let char = remaining.popFirst(),
                 !whitespace.contains(char) {
                 token.append(Character(char))
             }
         }
-        return token
+        return token + "'"
     }
 
     if let match = try json() {
         if index < input.endIndex {
-            throw Error(string: "Unexpected token \(token()) at \(offset)")
+            if bestIndex > index, let expected = expected {
+                throw Error(string: "Unexpected token \(token(at: bestIndex)) at \(indexToOffset(bestIndex)) (expected \(expected))")
+            }
+            throw Error(string: "Unexpected token \(token(at: index)) at \(indexToOffset(index))")
         }
         return match
-    } else if let expected = expected {
-        throw Error(string: "Unexpected token \(token()) at \(offset) (expected \(expected))")
     } else {
-        throw Error(string: "Unexpected token \(token()) at \(offset)")
+        throw Error(string: "Unexpected token \(token(at: bestIndex)) at \(indexToOffset(bestIndex)) (expected \(expected ?? "json"))")
     }
 }
